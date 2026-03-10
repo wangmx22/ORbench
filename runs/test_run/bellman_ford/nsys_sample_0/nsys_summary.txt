@@ -1,0 +1,33 @@
+======================================================================
+  ORBench nsys Profiling Summary
+======================================================================
+
+[ Overall GPU Activity ]
+  Total GPU span:      6.117 ms
+  Kernel time:         1.375 ms
+  Memcpy/memset time:  2.503 ms
+  GPU idle time:       2.239 ms
+  GPU utilization:     63.4%
+  Kernel launches:     28
+
+[ Kernel Breakdown ]
+  Kernel                                         Count  Total(ms)    Avg(us)    Min(us)    Max(us)
+  -----------------------------------------------------------------------------------------------
+  bf_kernel                                         28      1.375       49.1        3.3      173.0
+
+[ CUDA API Summary (CPU-side) ]
+  Function                                    Calls  Total(ms)    Avg(us)   Time%
+  --------------------------------------------------------------------------------
+  cudaMalloc                                      5    612.992   122598.5   99.1%
+  cudaMemcpy                                     31      4.893      157.9    0.8%
+  cudaFree                                        5      0.454       90.8    0.1%
+  cudaLaunchKernel                               28      0.247        8.8    0.0%
+  cudaMemset                                     28      0.061        2.2    0.0%
+  cudaDeviceSynchronize                           3      0.026        8.7    0.0%
+  cudaEventRecord                                 2      0.007        3.4    0.0%
+  cudaEventSynchronize                            1      0.006        6.1    0.0%
+  cudaEventCreate                                 2      0.003        1.7    0.0%
+  cuModuleGetLoadingMode                          1      0.003        2.8    0.0%
+  cudaEventDestroy                                2      0.001        0.6    0.0%
+
+======================================================================

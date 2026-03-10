@@ -1,0 +1,133 @@
+"""
+compile.py - Compile CUDA solutions using nvcc
+Compilation can run on CPU-only machines (no GPU needed).
+"""
+
+import os
+import subprocess
+import shutil
+from dataclasses import dataclass
+
+from .task import load_task, ORBENCH_ROOT
+
+
+@dataclass
+class CompileResult:
+    success: bool
+    executable_path: str = ""
+    stdout: str = ""
+    stderr: str = ""
+
+
+def compile_solution(
+    task_id: str,
+    solution_path: str,
+    build_dir: str = None,
+    arch: str = "sm_89",
+    timeout: int = 60,
+) -> CompileResult:
+    """
+    Compile a single .cu solution file.
+    
+    Args:
+        task_id: Task identifier
+        solution_path: Path to the .cu source file
+        build_dir: Directory for build artifacts (default: cache/{task_id}/{hash})
+        arch: CUDA architecture target
+        timeout: Compilation timeout in seconds
+    
+    Returns:
+        CompileResult with success flag, executable path, and compiler output
+    """
+    task = load_task(task_id)
+
+    if build_dir is None:
+        # Use content hash for cache key
+        with open(solution_path, "r") as f:
+            content_hash = str(abs(hash(f.read())))[:12]
+        build_dir = os.path.join(ORBENCH_ROOT, "cache", task_id, content_hash)
+
+    os.makedirs(build_dir, exist_ok=True)
+
+    # Copy source to build directory
+    src_in_build = os.path.join(build_dir, "solution.cu")
+    shutil.copy2(solution_path, src_in_build)
+
+    exe_path = os.path.join(build_dir, "solution")
+
+    # Single file compilation - LLM_input.cu is self-contained
+    cmd = ["nvcc", "-O2", f"-arch={arch}", "-o", exe_path, src_in_build]
+
+    # Add extra flags from task config
+    if task.extra_build_flags:
+        cmd.extend(task.extra_build_flags.split())
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=timeout,
+            text=True,
+        )
+
+        if result.returncode == 0:
+            return CompileResult(
+                success=True,
+                executable_path=exe_path,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+        else:
+            return CompileResult(
+                success=False,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+
+    except subprocess.TimeoutExpired:
+        return CompileResult(success=False, stderr="Compilation timed out")
+    except Exception as e:
+        return CompileResult(success=False, stderr=str(e))
+
+
+def batch_compile(
+    tasks_and_solutions: list[tuple[str, str]],
+    arch: str = "sm_89",
+    num_workers: int = 8,
+) -> dict[str, CompileResult]:
+    """
+    Compile multiple solutions in parallel (CPU-only, no GPU needed).
+    
+    Args:
+        tasks_and_solutions: List of (task_id, solution_path) tuples
+        arch: CUDA architecture
+        num_workers: Number of parallel compilation processes
+    
+    Returns:
+        Dict mapping solution_path -> CompileResult
+    """
+    import multiprocessing as mp
+
+    def _compile_one(args):
+        task_id, solution_path = args
+        return solution_path, compile_solution(task_id, solution_path, arch=arch)
+
+    results = {}
+    with mp.Pool(num_workers) as pool:
+        for sol_path, result in pool.imap_unordered(_compile_one, tasks_and_solutions):
+            results[sol_path] = result
+            status = "OK" if result.success else "FAIL"
+            print(f"  [{status}] {sol_path}")
+
+    return results
+
+
+def cleanup_build_dir(task_id: str, content_hash: str = None):
+    """Remove cached build artifacts"""
+    if content_hash:
+        build_dir = os.path.join(ORBENCH_ROOT, "cache", task_id, content_hash)
+    else:
+        build_dir = os.path.join(ORBENCH_ROOT, "cache", task_id)
+
+    if os.path.exists(build_dir):
+        shutil.rmtree(build_dir, ignore_errors=True)

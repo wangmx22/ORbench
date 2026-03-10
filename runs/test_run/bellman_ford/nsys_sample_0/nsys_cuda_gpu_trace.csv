@@ -1,0 +1,88 @@
+Start (ns),Duration (ns),CorrId,GrdX,GrdY,GrdZ,BlkX,BlkY,BlkZ,Reg/Trd,StcSMem (MB),DymSMem (MB),Bytes (MB),Throughput (MB/s),SrcMemKd,DstMemKd,Device,Ctx,GreenCtx,Strm,Name
+1025410596,127552,123,,,,,,,,,,2.000,15678.031,Pageable,Device,NVIDIA L20X (0),1,,7,[CUDA memcpy Host-to-Device]
+1025667492,1031134,124,,,,,,,,,,10.000,9690.000,Pageable,Device,NVIDIA L20X (0),1,,7,[CUDA memcpy Host-to-Device]
+1026827809,1050335,125,,,,,,,,,,10.000,9520.000,Pageable,Device,NVIDIA L20X (0),1,,7,[CUDA memcpy Host-to-Device]
+1028920958,79456,126,,,,,,,,,,2.000,25170.000,Pageable,Device,NVIDIA L20X (0),1,,7,[CUDA memcpy Host-to-Device]
+1029003198,800,127,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029152797,3264,128,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029164733,896,130,,,,,,,,,,0.000,4.464,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029170205,5120,131,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029181981,768,133,,,,,,,,,,0.000,5.208,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029185341,6368,134,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029515901,81664,136,,,,,,,,,,2.000,24490.000,Pageable,Device,NVIDIA L20X (0),1,,7,[CUDA memcpy Host-to-Device]
+1029606333,768,140,,,,,,,,,,0.000,5.208,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029608573,3360,141,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029617565,2752,142,,,,,,,,,,0.000,1.453,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1029629757,864,143,,,,,,,,,,0.000,4.630,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029633213,4704,144,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029639868,2368,145,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1029649948,800,146,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029653628,6144,147,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029665788,2400,148,,,,,,,,,,0.000,1.667,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1029675964,896,149,,,,,,,,,,0.000,4.464,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029679740,7201,150,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029691357,2368,151,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1029701373,896,152,,,,,,,,,,0.000,4.464,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029704541,9088,153,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029716957,2368,154,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1029726941,800,155,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029730525,14144,156,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029751805,2368,157,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1029761533,799,158,,,,,,,,,,0.000,5.006,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029764828,57920,159,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029826588,2368,160,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1029837596,800,161,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1029844220,142080,162,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1029988412,2368,163,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1029998460,800,164,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030001788,172992,165,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1030178812,2400,166,,,,,,,,,,0.000,1.667,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1030189020,768,167,,,,,,,,,,0.000,5.208,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030191932,151936,168,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1030352860,2368,169,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1030363004,800,170,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030366428,128863,171,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1030502363,2368,172,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1030512795,768,173,,,,,,,,,,0.000,5.208,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030515611,108800,174,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1030627323,2400,175,,,,,,,,,,0.000,1.667,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1030637019,800,176,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030640379,88192,177,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1030735835,2368,178,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1030745978,1696,179,,,,,,,,,,0.000,2.358,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030749178,70721,180,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1030827003,2368,181,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1030836763,800,182,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030839643,61119,183,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1030909914,2400,184,,,,,,,,,,0.000,1.667,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1030919866,800,185,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030923130,53345,186,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1030984667,2367,187,,,,,,,,,,0.000,1.690,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1030994490,800,188,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1030997274,45440,189,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031051226,2368,190,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031061114,768,191,,,,,,,,,,0.000,5.208,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1031064538,38368,192,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031110586,2400,193,,,,,,,,,,0.000,1.667,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031121146,800,194,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1031123930,30336,195,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031161850,2432,196,,,,,,,,,,0.000,1.645,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031171962,800,197,,,,,,,,,,0.000,5.000,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1031175002,27616,198,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031204826,2400,199,,,,,,,,,,0.000,1.667,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031214586,896,200,,,,,,,,,,0.000,4.464,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1031217498,27456,201,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031246842,2368,202,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031256794,1856,203,,,,,,,,,,0.000,2.155,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1031260122,27840,204,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031295994,2400,205,,,,,,,,,,0.000,1.667,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031305786,768,206,,,,,,,,,,0.000,5.208,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1031309178,27424,207,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031339002,2368,208,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031349242,1920,209,,,,,,,,,,0.000,2.083,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1031352634,27647,210,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031389177,2369,211,,,,,,,,,,0.000,1.688,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031399002,896,212,,,,,,,,,,0.000,4.464,Device,,NVIDIA L20X (0),1,,7,[CUDA memset]
+1031402298,27584,213,1954,1,1,256,1,1,16,0.000,0.000,,,,,NVIDIA L20X (0),1,,7,"bf_kernel(int, const int *, const int *, const float *, float *, int *)"
+1031439322,2368,214,,,,,,,,,,0.000,1.689,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]
+1031480377,46784,220,,,,,,,,,,2.000,42748.000,Device,Pageable,NVIDIA L20X (0),1,,7,[CUDA memcpy Device-to-Host]

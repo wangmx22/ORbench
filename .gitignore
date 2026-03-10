@@ -1,0 +1,22 @@
+# 二进制数据文件
+*.bin
+tasks/*/data/
+
+# 编译产物
+cache/
+*.o
+*.out
+solution
+
+# nsys 产物
+*.nsys-rep
+*.sqlite
+*.qdstrm
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+
+# 系统文件
+.DS_Store
