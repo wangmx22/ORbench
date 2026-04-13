@@ -13,6 +13,11 @@ cache/
 *.o
 *.out
 solution
+tasks/*/gpu_baseline_exe
+tasks/*/solution_cpu
+
+# 第三方参考数据集（独立 git 仓库）
+tasks/FinanceBench/
 
 # nsys 产物
 *.nsys-rep

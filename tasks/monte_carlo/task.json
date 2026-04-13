@@ -1,0 +1,36 @@
+{
+  "task_id": "monte_carlo",
+  "name": "Monte Carlo Option Pricing (Path Simulation)",
+  "category": "financial_computing",
+  "difficulty": 2,
+  "tags": ["option_pricing", "stochastic_simulation", "random_number_generation"],
+  "interface_mode": "compute_only",
+
+  "input_sizes": {
+    "small":  {"N": 100000,   "seed": 42},
+    "medium": {"N": 1000000,  "seed": 42},
+    "large":  {"N": 10000000, "seed": 42}
+  },
+
+  "correctness": {
+    "mode": "numerical",
+    "atol": 0.01,
+    "rtol": 1e-4
+  },
+
+  "timing": {
+    "warmup": 3,
+    "trials": 10,
+    "timeout": 120
+  },
+
+  "build_command": "",
+  "extra_build_flags": "",
+
+  "gpu_optimization_points": [
+    "one_thread_per_path",
+    "device_side_rng",
+    "fast_math_intrinsics",
+    "coalesced_memory_access"
+  ]
+}

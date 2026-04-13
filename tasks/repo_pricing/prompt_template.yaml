@@ -1,0 +1,127 @@
+# Repurchase Agreement Pricing -- Prompt Template
+
+task_description: |
+  Given N repurchase agreements (repos), compute for each repo:
+  1. **Bond yield-to-maturity** via Newton-Raphson/Brent hybrid solver
+  2. **Dirty price** and **clean price** of the underlying bond
+  3. **Accrued amounts** at settlement and delivery dates
+  4. **Forward spot income**, **underlying bond forward**
+  5. **Repo NPV**, **repo clean/dirty forward price**
+  6. **Repo implied yield** and **market repo rate**
+
+  Each repo is defined by settlement/delivery dates, bond issue/maturity dates,
+  bond coupon rate, repo rate, bond clean price, and a dummy strike.
+  The computation includes full bond pricing plus repo-specific forward calculations.
+
+  Output: 12 float values per repo.
+
+interface: |
+  ```c
+  extern "C" void solution_init(
+      int N,
+      const int* settle_year,      // host, [N]
+      const int* settle_month,     // host, [N]
+      const int* settle_day,       // host, [N]
+      const int* delivery_year,    // host, [N]
+      const int* delivery_month,   // host, [N]
+      const int* delivery_day,     // host, [N]
+      const int* issue_year,       // host, [N]
+      const int* issue_month,      // host, [N]
+      const int* issue_day,        // host, [N]
+      const int* maturity_year,    // host, [N]
+      const int* maturity_month,   // host, [N]
+      const int* maturity_day,     // host, [N]
+      const float* bond_rates,     // host, [N], coupon rates
+      const float* repo_rates,     // host, [N], repo rates
+      const float* bond_clean_prices, // host, [N]
+      const float* dummy_strikes   // host, [N]
+  );
+
+  extern "C" void solution_compute(
+      int N,                        // number of repos
+      float* prices                 // host, [N*12], output per repo
+  );
+
+  extern "C" void solution_free(void);
+  ```
+
+input_size_notes: |
+  - **small**: 100,000 repos
+  - **medium**: 1,000,000 repos
+  - **large**: 5,000,000 repos
+  - Settlement dates: Jan-Mar 2000
+  - Delivery dates: Sep-Nov 2000
+  - Bond issue dates: 1998-1999, maturity: 2001
+  - Bond rates: ~0.08 +/- 0.05, Repo rates: ~0.05 +/- 0.05
+  - Bond clean price: 89.97693786, Dummy strike: 91.5745
+
+output_contract: |
+  Per repo i, 12 floats at `prices[i*12 + k]`:
+  - k=0:  dirty price
+  - k=1:  accrued amount at settlement
+  - k=2:  accrued amount at delivery
+  - k=3:  clean price (dirty - accrued at settlement)
+  - k=4:  forward spot income
+  - k=5:  underlying bond forward
+  - k=6:  repo NPV
+  - k=7:  repo clean forward price
+  - k=8:  repo dirty forward price
+  - k=9:  repo implied yield
+  - k=10: market repo rate
+  - k=11: bond forward value (yield)
+  - Numerical tolerance: atol=0.01, rtol=1e-4
+  - `solution_compute` must be **idempotent** and **synchronize** before returning
+
+algorithm_background: |
+  **Date Arithmetic** (same as bonds_pricing):
+  - Serial number dates, 30/360 day count, leap year lookup tables
+  - Year fraction = dayCount / 360.0
+
+  **Bond Pricing** (same as bonds_pricing):
+  - Cash flow construction from maturity backward in 6-month steps
+  - Yield-to-maturity via Brent/Newton solver
+  - Dirty price via NPV of discounted cash flows
+  - Accrued amounts via coupon accrual computation
+
+  **Repo-Specific Calculations**:
+  - Repo curve uses SIMPLE_INTEREST compounding with serial number day counter
+  - Forward spot income: sum of coupon amounts between settlement and delivery,
+    each discounted via repo curve
+  - Underlying bond forward = forwardSpotIncome / repoDiscount(deliveryDate)
+  - Forward value = (dirtyPrice - forwardSpotIncome) / repoDiscount(deliveryDate)
+  - Repo NPV = (forwardVal - strike) * repoDiscount(deliveryDate)
+  - Repo clean forward = forwardVal - accruedAmount(deliveryDate)
+  - Implied yield: compound = strike / (dirtyPrice - forwardSpotIncome), then
+    impliedRate(compound, SIMPLE, 1.0, yearFrac(settlement, delivery))
+  - Market repo rate: compound = 1/repoDiscount(delivery), then
+    impliedRate(compound, SIMPLE, 1.0, yearFrac(settlement, delivery))
+
+  Complexity: O(K * M) per repo (K = solver iterations, M = coupon periods).
+  Each repo is completely independent -- embarrassingly parallel.
+
+hints_l2: |
+  - Copy all 16 input arrays to GPU in `solution_init`
+  - Launch one thread per repo
+  - Each thread independently computes all 12 output values
+  - Date lookup tables (yearOffset, isLeap) can be cached in shared/constant memory
+  - Cash flow arrays are small (~4-8 legs), allocatable in registers/local memory
+
+hints_l1: |
+  ### 1. Persistent GPU Data
+  In `solution_init`, copy all 12 date arrays + 4 float arrays to device.
+  Pre-allocate `prices` output buffer on device (N*12 floats).
+
+  ### 2. One Thread Per Repo
+  Each thread:
+  1. Loads settlement, delivery, issue, maturity dates and rates
+  2. Builds cash flow schedule (max ~8 legs in local arrays)
+  3. Runs Brent/Newton solver for bond yield
+  4. Computes dirty price, accrued amounts, clean price
+  5. Computes forward spot income, repo NPV, implied yield, market rate
+  6. Writes 12 output floats
+
+  ### 3. Optimization Opportunities
+  - Cache yearOffset (301 ints) and isLeap (301 bools) in constant memory
+  - The solver loop (10-20 iterations) dominates compute time
+  - Use `__ldg` for read-only input arrays
+  - Consider double precision for solver convergence, float for final output

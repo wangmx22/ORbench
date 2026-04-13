@@ -1,0 +1,39 @@
+{
+  "task_id": "nbnxm_forces",
+  "interface_mode": "compute_only",
+  "name": "Non-Bonded NxM Force Calculation (GROMACS-style)",
+  "category": "molecular_dynamics",
+  "difficulty": 3,
+  "tags": ["pair_interaction", "LJ", "Coulomb", "force_accumulation",
+           "atomic_add", "neighbor_list", "scientific_computing"],
+
+  "input_sizes": {
+    "small":  {"N": 10000,  "rcut_x100": 120, "density_x10": 333, "num_types": 2, "seed": 42},
+    "medium": {"N": 100000, "rcut_x100": 100, "density_x10": 333, "num_types": 2, "seed": 42},
+    "large":  {"N": 500000, "rcut_x100": 100, "density_x10": 333, "num_types": 2, "seed": 42}
+  },
+
+  "correctness": {
+    "mode": "numerical",
+    "atol": 0.01,
+    "rtol": 1e-4
+  },
+
+  "timing": {
+    "warmup": 2,
+    "trials": 5,
+    "timeout": 600
+  },
+
+  "build_command": "",
+  "extra_build_flags": "",
+
+  "gpu_optimization_points": [
+    "parallel_pair_processing",
+    "atomic_force_accumulation",
+    "shared_memory_atom_data",
+    "coalesced_pair_list_access",
+    "fast_rsqrt_intrinsic",
+    "newton_third_law_optimization"
+  ]
+}

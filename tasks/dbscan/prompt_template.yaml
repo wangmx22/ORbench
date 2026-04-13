@@ -1,0 +1,141 @@
+# DBSCAN Density-Based Spatial Clustering — Prompt Template
+
+task_description: |
+  Implement GPU-accelerated DBSCAN (Density-Based Spatial Clustering of Applications
+  with Noise) for 2D point data.
+
+  Given N 2D points and parameters epsilon (distance threshold) and minPts (minimum
+  neighbor count), classify each point as belonging to a cluster (positive integer ID)
+  or as noise (-2).
+
+  DBSCAN algorithm:
+  1. For each unprocessed point, find all neighbors within distance epsilon
+  2. If neighbors >= minPts: it's a core point — start a new cluster, expand from seeds
+  3. If neighbors < minPts: mark as noise (may later be absorbed into a cluster)
+  4. Expansion: for each seed neighbor, repeat neighbor search; if also core, add its
+     neighbors to the seed list
+
+  The main computational bottleneck is the neighbor search: O(N) per point brute-force,
+  O(N^2) total. GPU acceleration via spatial indexing (grid/tree) can reduce this
+  dramatically.
+
+  Based on CUDA-DClust+ (Poudel & Gowanlock, "CUDA-DClust+: Revisiting Early
+  GPU-Accelerated DBSCAN Clustering Designs", IEEE HiPC 2021).
+
+interface: |
+  ```c
+  // Called once. Store point data and parameters.
+  extern "C" void solution_init(
+      int N,                    // number of points
+      const float* xs,          // HOST [N]: x coordinates
+      const float* ys,          // HOST [N]: y coordinates
+      float eps,                // epsilon distance threshold
+      int minPts                // minimum neighbors to be a core point
+  );
+
+  // Called multiple times (must be idempotent).
+  // Compute DBSCAN clustering and write cluster labels.
+  extern "C" void solution_compute(
+      int N,                    // number of points
+      int* labels               // HOST [N]: output cluster labels
+                                //   > 0: cluster ID
+                                //   -2: noise (NOISE)
+  );
+
+  extern "C" void solution_free(void);
+  ```
+
+input_size_notes: |
+  | Size   | N (points)  | epsilon | minPts |
+  |--------|-------------|---------|--------|
+  | small  | 10,000      | 0.015   | 4      |
+  | medium | 100,000     | 0.008   | 8      |
+  | large  | 500,000     | 0.004   | 8      |
+
+  - Points are 2D (x, y) in the range [0, 1]
+  - Points form Gaussian clusters with ~5% uniform noise
+  - Cluster labels must be exact match (not just same clustering structure)
+  - Labels: positive integers for clusters, -2 for noise
+
+output_contract: |
+  - `labels[i]` = integer cluster ID (>0) or NOISE (-2)
+  - Every non-noise point must be assigned to exactly one cluster
+  - Cluster IDs must be consistent (same point → same cluster across calls)
+  - `solution_compute` must be idempotent and synchronize before returning
+
+algorithm_background: |
+  **DBSCAN Algorithm (Ester et al., 1996)**
+
+  ```
+  For each point p in dataset:
+    if p is already processed: skip
+
+    neighbors = regionQuery(p, eps)  // find all points within eps distance
+
+    if |neighbors| < minPts:
+      mark p as NOISE
+    else:
+      create new cluster C
+      add p to C
+      seeds = neighbors
+      while seeds is not empty:
+        q = seeds.pop()
+        if q is NOISE: add q to C  // border point
+        if q is already in a cluster: skip
+        add q to C
+        q_neighbors = regionQuery(q, eps)
+        if |q_neighbors| >= minPts:
+          seeds.addAll(q_neighbors)  // q is also a core point
+  ```
+
+  **regionQuery** is the bottleneck: brute-force is O(N) per query.
+  Total: O(N^2) for brute-force, O(N log N) with spatial index.
+
+hints_l2: |
+  - **Neighbor search parallelization**: The most impactful optimization
+  - Build a uniform grid (cell size = epsilon) to limit distance calculations
+  - Each point only checks the 9 neighboring cells (2D) for potential neighbors
+  - Grid construction: compute cell index for each point, sort by cell, build offsets
+  - Cluster expansion is inherently sequential — but neighbor search within expansion
+    can be parallelized
+  - Use atomics for cluster label assignment (multiple threads may try to assign)
+  - Consider a two-phase approach: (1) parallel neighbor count, (2) sequential expansion
+
+hints_l1: |
+  ### 1. Grid-Based Neighbor Search
+  ```cuda
+  // Precompute grid cell for each point
+  int cell_x = (int)(x / eps);
+  int cell_y = (int)(y / eps);
+  int cell_id = cell_x * grid_dim_y + cell_y;
+
+  // Sort points by cell_id (thrust::sort_by_key)
+  // Build cell offsets (scan to find start/end of each cell)
+  ```
+
+  ### 2. Parallel Neighbor Counting Kernel
+  ```cuda
+  __global__ void count_neighbors(int N, float* xs, float* ys,
+                                   int* cell_offsets, int* sorted_indices,
+                                   float eps2, int* neighbor_counts) {
+      int i = blockIdx.x * blockDim.x + threadIdx.x;
+      if (i >= N) return;
+      // Check 9 neighboring cells
+      // Count points within eps distance
+      neighbor_counts[i] = count;
+  }
+  ```
+
+  ### 3. Cluster Expansion Strategy
+  Two approaches:
+  - **CPU-driven expansion + GPU neighbor search**: CPU maintains seed queue,
+    launches GPU kernel per expansion step (simpler but kernel launch overhead)
+  - **Fully GPU expansion**: Multiple thread blocks each expand one cluster
+    simultaneously, merge conflicts on CPU (matches CUDA-DClust+ approach)
+
+  ### 4. Atomic Cluster Assignment
+  ```cuda
+  atomicCAS(&labels[j], UNCLASSIFIED, cluster_id);
+  ```
+  Use compare-and-swap to avoid race conditions when multiple clusters
+  try to claim the same point.

@@ -1,0 +1,118 @@
+# Fixed-Rate Bond Pricing -- Prompt Template
+
+task_description: |
+  Given N fixed-rate bonds, compute for each bond:
+  1. **Yield-to-maturity** (bond forward value) via a Newton-Raphson/Brent hybrid solver
+  2. **Dirty price** (present value of all cash flows using the computed yield curve)
+  3. **Accrued amount** (interest accrued from last coupon date to settlement)
+  4. **Clean price** (dirty price minus accrued amount)
+
+  Each bond is defined by an issue date, maturity date, and coupon rate.
+  Cash flows are generated at semiannual intervals from maturity backward.
+  Day counting uses the 30/360 convention (USE_EXACT_DAY mode).
+
+  Output: 4 float values per bond: [dirty_price, accrued_amount, clean_price, yield].
+
+interface: |
+  ```c
+  extern "C" void solution_init(
+      int N,
+      const int* issue_year,      // host, [N]
+      const int* issue_month,     // host, [N]
+      const int* issue_day,       // host, [N]
+      const int* maturity_year,   // host, [N]
+      const int* maturity_month,  // host, [N]
+      const int* maturity_day,    // host, [N]
+      const float* rates,         // host, [N], coupon rates
+      float coupon_freq           // semiannual = 2.0
+  );
+
+  extern "C" void solution_compute(
+      int N,                       // number of bonds
+      float* prices                // host, [N*4], output: dirty, accrued, clean, yield per bond
+  );
+
+  extern "C" void solution_free(void);
+  ```
+
+input_size_notes: |
+  - **small**: 100,000 bonds
+  - **medium**: 1,000,000 bonds
+  - **large**: 10,000,000 bonds
+  - Issue dates: 1998-1999, Maturity dates: 2000-2001
+  - Coupon rates: ~0.08 +/- 0.05
+  - Coupon frequency: semiannual (2.0)
+  - `coupon_freq` is encoded as int * 100 in the binary input (divide by 100.0f to decode)
+
+output_contract: |
+  - `prices[i*4+0]` = dirty price of bond i
+  - `prices[i*4+1]` = accrued amount of bond i
+  - `prices[i*4+2]` = clean price of bond i (= dirty - accrued)
+  - `prices[i*4+3]` = yield-to-maturity (bond forward value) of bond i
+  - Numerical tolerance: atol=0.01, rtol=1e-4
+  - `solution_compute` must be **idempotent** and **synchronize** before returning
+
+algorithm_background: |
+  **Date Arithmetic**:
+  - Dates are represented with serial numbers (days since 1900-01-01)
+  - 30/360 day count convention: dayCount = 360*(Y2-Y1) + 30*(M2-M1-1) + max(0,30-D1) + min(30,D2)
+  - Year fraction = dayCount / 360.0
+  - Leap year and month length lookup tables are used for date serial number computation
+
+  **Cash Flow Construction**:
+  - Starting from maturity, step backward in 6-month increments to build coupon dates
+  - Each coupon leg has payment date, accrual start/end dates
+  - Coupon amount = 100 * (compoundFactor(rate, accrualStart, accrualEnd) - 1)
+  - Final leg is the principal redemption (amount = 100.0)
+  - The settlement date (todaysDate) is maturityDate minus 1 day
+
+  **Interest Rate Compound Factor**:
+  - Simple: 1 + r*t
+  - Compounded: (1 + r/freq)^(freq*t)
+  - Continuous: exp(r*t)
+
+  **Yield-to-Maturity Solver**:
+  - Find yield y such that NPV(cashflows, y) = dirtyPrice
+  - Uses Brent bracket-expansion then Newton-Raphson with bisection fallback
+  - Derivative uses modified duration formula:
+    dP/dy = sum_i [ -c_i * t_i * B_i / (1 + r/freq) ] for compounded interest
+  - Convergence: |dx| < 1e-8, max 100 iterations
+
+  **Dirty Price**:
+  - NPV of all cash flows discounted at the solved yield
+  - Each flow discounted by discountFactor(yieldRate, yearFraction(refDate, paymentDate))
+
+  **Accrued Amount**:
+  - Sum of accrued interest from coupon legs spanning the settlement date
+  - For each relevant leg: 100 * (compoundFactor(rate, accrualStart, min(settlement, accrualEnd)) - 1)
+
+  Complexity: O(K * M) per bond where K = solver iterations (~10-20), M = number of coupon periods (~4-8).
+  Bonds are completely independent -- embarrassingly parallel.
+
+hints_l2: |
+  - Copy all bond data arrays to GPU at the start of `solution_init`
+  - Launch one thread per bond, each independently computing yield + prices
+  - Use `float` or `double` math as needed for solver convergence
+  - All per-bond cash flow arrays can be allocated in registers/local memory (small M)
+
+hints_l1: |
+  ### 1. Persistent GPU Data
+  In `solution_init`, copy `issue_year/month/day`, `maturity_year/month/day`, `rates` to device.
+  Pre-allocate `prices` output buffer on device (N*4 floats).
+
+  ### 2. One Thread Per Bond
+  Each thread:
+  1. Loads its bond's issue/maturity dates and rate
+  2. Builds cash flow schedule in local arrays (max ~10 legs)
+  3. Runs the Brent/Newton solver to find yield
+  4. Computes dirty price, accrued amount, clean price
+  5. Writes 4 output floats
+
+  ### 3. Optimization Opportunities
+  - Use shared memory or constant memory to cache the yearOffset/isLeap lookup tables (301 ints + 301 bools)
+  - Date serial number computation is branch-heavy but short
+  - Solver convergence loop is 10-20 iterations with early exit
+  - Cash flow arrays are small enough for register/local allocation (max ~10 legs)
+  - Consider using `__ldg` for read-only input arrays
+  - Warp-level cooperation is not beneficial (each bond is independent)
+  - Memory coalescing: ensure thread i reads from index i of each input array

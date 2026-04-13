@@ -1,0 +1,138 @@
+# SPH Cell-Linked List Construction -- Prompt Template
+
+task_description: |
+  Construct a cell-linked list data structure for Smoothed Particle Hydrodynamics
+  (SPH) neighbor search. Given N particle positions in 3D and a uniform grid:
+
+  1. Compute the cell index for each particle: cell_id = floor(pos/cell_size)
+  2. Sort particles by cell index
+  3. Build begin/end arrays: for each cell, store the index range [begin, end)
+     of particles in the sorted order that belong to that cell
+
+  This is the spatial indexing step from DualSPHysics (Crespo et al. 2015),
+  specifically the KerCalcBeginEndCell kernel from JCellDivGpu_ker.cu.
+
+  Based on: DualSPHysics JCellDivGpu_ker.cu, KerCalcBeginEndCell.
+  Reference: Crespo et al. "DualSPHysics: Open-source parallel CFD solver based on
+  SPH", Computer Physics Communications, 2015.
+
+interface: |
+  ```c
+  // Called once to receive particle positions and grid parameters.
+  extern "C" void solution_init(
+      int N,                      // number of particles
+      const float* xs,            // HOST [N]: x positions
+      const float* ys,            // HOST [N]: y positions
+      const float* zs,            // HOST [N]: z positions
+      float cell_size,            // uniform cell size
+      int grid_nx,                // number of cells in x
+      int grid_ny,                // number of cells in y
+      int grid_nz                 // number of cells in z
+  );
+
+  // Called multiple times (must be idempotent and synchronize before returning).
+  extern "C" void solution_compute(
+      int N,                      // number of particles
+      int num_cells,              // total cells = grid_nx * grid_ny * grid_nz
+      int* sorted_indices,        // HOST [N]: particle indices in sorted order
+      int* cell_begin,            // HOST [num_cells]: first particle index for each cell (-1 if empty)
+      int* cell_end               // HOST [num_cells]: one-past-last particle index (-1 if empty)
+  );
+  ```
+
+input_size_notes: |
+  | Size   | N (particles) |
+  |--------|--------------|
+  | small  | 50,000       |
+  | medium | 500,000      |
+  | large  | 5,000,000    |
+
+  - Grid dimensions: ~100x50x50 cells (domain 4x2x2, cell_size=0.04)
+  - num_cells = grid_nx * grid_ny * grid_nz (~250,000)
+  - Cell index: cx + cy*grid_nx + cz*grid_nx*grid_ny
+  - Particles are uniformly distributed (each cell has ~N/num_cells particles)
+
+output_contract: |
+  - sorted_indices[i]: the original particle index of the i-th particle in cell-sorted order
+  - cell_begin[c]: index into sorted_indices where cell c starts (-1 if empty)
+  - cell_end[c]: index into sorted_indices where cell c ends (-1 if empty)
+  - For non-empty cell c: particles sorted_indices[cell_begin[c]..cell_end[c]-1] all have cell_id == c
+  - Correctness mode: exact (integer outputs)
+  - solution_compute must be idempotent and synchronize before returning
+
+algorithm_background: |
+  **Cell-Linked List for SPH Neighbor Search**
+
+  SPH simulations need to find all particle pairs within a cutoff radius (2h).
+  A cell-linked list divides space into uniform cells of size >= 2h, so
+  neighbors can only be in the same cell or 26 adjacent cells.
+
+  Construction steps:
+  1. **Cell assignment**: For each particle p with position (x,y,z):
+     ```
+     cx = floor(x / cell_size), cy = floor(y / cell_size), cz = floor(z / cell_size)
+     cell_id = cx + cy * grid_nx + cz * grid_nx * grid_ny
+     ```
+
+  2. **Sort by cell_id**: Reorder particles so all particles in the same cell
+     are contiguous. This is typically done with a radix sort on GPU.
+
+  3. **Build begin/end arrays** (KerCalcBeginEndCell in DualSPHysics):
+     Scan the sorted cell_id array. When cell_id changes between positions i-1
+     and i, set cell_end[old_cell] = i and cell_begin[new_cell] = i.
+
+  The begin/end arrays allow O(1) lookup of all particles in any cell.
+
+hints_l2: |
+  - Step 1 (cell assignment) is embarrassingly parallel: one thread per particle
+  - Step 2 (sort) is the bottleneck: use CUB DeviceRadixSort or Thrust sort_by_key
+  - Step 3 (begin/end) is parallel: each thread checks if its cell_id differs from predecessor
+  - Use shared memory in Step 3 (as DualSPHysics does) for the boundary detection
+  - Pre-allocate all device memory in solution_init
+
+hints_l1: |
+  ### 1. Cell Assignment Kernel
+  ```cuda
+  __global__ void KerComputeCellId(int N, const float* xs, const float* ys,
+      const float* zs, float cell_size, int nx, int ny, unsigned int* cell_ids,
+      unsigned int* indices) {
+      int i = blockIdx.x * blockDim.x + threadIdx.x;
+      if (i >= N) return;
+      int cx = (int)floorf(xs[i] / cell_size);
+      int cy = (int)floorf(ys[i] / cell_size);
+      int cz = (int)floorf(zs[i] / cell_size);
+      cell_ids[i] = cx + cy * nx + cz * nx * ny;
+      indices[i] = i;
+  }
+  ```
+
+  ### 2. Sort
+  Use CUB DeviceRadixSort::SortPairs to sort (cell_ids, indices) by cell_ids.
+  This gives O(N) radix sort performance on GPU.
+
+  ### 3. Begin/End Kernel (matches DualSPHysics KerCalcBeginEndCell)
+  ```cuda
+  __global__ void KerCalcBeginEndCell(int N, const unsigned int* cellpart,
+      int* begcell, int* endcell) {
+      extern __shared__ unsigned int scell[];
+      int i = blockIdx.x * blockDim.x + threadIdx.x;
+      if (i < N) {
+          unsigned int cel = cellpart[i];
+          scell[threadIdx.x + 1] = cel;
+          if (i > 0 && threadIdx.x == 0) scell[0] = cellpart[i - 1];
+      }
+      __syncthreads();
+      if (i < N) {
+          unsigned int cel = cellpart[i];
+          if (i == 0 || cel != scell[threadIdx.x]) {
+              begcell[cel] = i;
+              if (i > 0) endcell[scell[threadIdx.x]] = i;
+          }
+          if (i == N - 1) endcell[cel] = i + 1;
+      }
+  }
+  ```
+
+  ### 4. Launch Configuration
+  - 256 threads per block for all kernels
+  - Shared memory: (blockDim.x + 1) * sizeof(unsigned int) for begin/end kernel

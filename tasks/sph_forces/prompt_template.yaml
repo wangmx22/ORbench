@@ -1,0 +1,181 @@
+# SPH Force Computation -- Prompt Template
+
+task_description: |
+  Compute inter-particle forces in a Smoothed Particle Hydrodynamics (SPH) simulation.
+  For each particle, iterate over neighbors within the smoothing radius (2h) using a
+  precomputed cell-linked list, and compute:
+  - Pressure force (momentum equation)
+  - Artificial viscosity (Monaghan 1992)
+  - Density rate of change (continuity equation)
+
+  Uses the Wendland C2 smoothing kernel and Tait equation of state.
+
+  This is the core computational kernel from DualSPHysics (Crespo et al. 2015),
+  specifically the KerInteractionForcesFluidBox device function.
+
+  Based on: DualSPHysics JSphGpu_ker.cu, KerInteractionForcesFluidBox.
+  Reference: Crespo et al. "DualSPHysics: Open-source parallel CFD solver based on
+  SPH", Computer Physics Communications, 2015.
+
+interface: |
+  ```c
+  // Called once to receive all particle data and precomputed cell structure.
+  extern "C" void solution_init(
+      int N,                      // number of particles
+      const float* xs,            // HOST [N]: x positions
+      const float* ys,            // HOST [N]: y positions
+      const float* zs,            // HOST [N]: z positions
+      const float* vxs,           // HOST [N]: x velocities
+      const float* vys,           // HOST [N]: y velocities
+      const float* vzs,           // HOST [N]: z velocities
+      const float* rhos,          // HOST [N]: densities
+      const float* masses,        // HOST [N]: particle masses
+      float h,                    // smoothing length
+      float cs0,                  // speed of sound
+      float rhop0,                // reference density
+      float alpha_visc,           // artificial viscosity coefficient
+      const int* cell_begin,      // HOST [num_cells]: begin index per cell
+      const int* cell_end,        // HOST [num_cells]: end index per cell
+      const int* sorted_idx,      // HOST [N]: sorted particle indices
+      int grid_nx,                // grid cells in x
+      int grid_ny,                // grid cells in y
+      int grid_nz,                // grid cells in z
+      float cell_size             // cell size (= 2*h)
+  );
+
+  // Called multiple times (must be idempotent and synchronize before returning).
+  extern "C" void solution_compute(
+      int N,                      // number of particles
+      float* ax,                  // HOST [N]: output x acceleration
+      float* ay,                  // HOST [N]: output y acceleration
+      float* az,                  // HOST [N]: output z acceleration
+      float* drhodt               // HOST [N]: output density rate of change
+  );
+  ```
+
+input_size_notes: |
+  | Size   | N (particles) |
+  |--------|--------------|
+  | small  | 10,000       |
+  | medium | 100,000      |
+  | large  | 500,000      |
+
+  - Domain: 0.5 x 0.5 x 0.5 m (dam-break)
+  - Smoothing length h = 0.01 m, cell_size = 2h = 0.02 m
+  - Grid: ~25 x 25 x 25 cells
+  - Each particle has ~30-100 neighbors on average
+  - Neighbor structure (cell_begin, cell_end, sorted_idx) is precomputed
+
+output_contract: |
+  - ax[i], ay[i], az[i]: acceleration of particle i due to pressure + viscosity forces
+  - drhodt[i]: density rate of change of particle i (continuity equation)
+  - Tolerance: atol=0.01, rtol=1e-3
+  - solution_compute must be idempotent and synchronize before returning
+
+algorithm_background: |
+  **SPH Force Computation with Wendland Kernel**
+
+  For each particle i, iterate over all neighbor particles j within distance 2h:
+
+  1. **Wendland C2 Kernel Gradient Factor**:
+     ```
+     q = |r_ij| / h
+     fac = bwenh * (1 - q/2)^3        (gradient factor, divided by distance)
+     grad_W = fac * r_ij               (gradient vector)
+     ```
+     where bwenh = -10 * awen / h, awen = 495 / (32 * pi * h^3)
+
+  2. **Tait Equation of State** (Monaghan 1994):
+     ```
+     P = B * ((rho / rho0)^gamma - 1)
+     B = cs0^2 * rho0 / gamma,  gamma = 7
+     ```
+
+  3. **Pressure Force** (momentum equation):
+     ```
+     a_i += -m_j * (P_i + P_j) / (rho_i * rho_j) * grad_W
+     ```
+
+  4. **Artificial Viscosity** (Monaghan 1992):
+     Only applied when particles approach each other (v_ij . r_ij < 0):
+     ```
+     mu = h * (v_ij . r_ij) / (r_ij^2 + 0.01*h^2)
+     Pi_visc = -alpha * cs0 * mu / rho_avg
+     a_i += -Pi_visc * m_j * grad_W
+     ```
+
+  5. **Continuity Equation** (density derivative):
+     ```
+     drho_i/dt += m_j * (v_ij . grad_W) * (rho_i / rho_j)
+     ```
+
+  **Neighbor Search**: Uses cell-linked list. Each particle's cell is computed,
+  then all 27 neighboring cells (3x3x3) are scanned for potential neighbors.
+  Only pairs with |r_ij|^2 <= (2h)^2 contribute.
+
+hints_l2: |
+  - One thread per particle i; each thread iterates over 27 neighbor cells
+  - Main challenge: irregular memory access pattern (neighbor lists vary per particle)
+  - Pre-upload all arrays + cell structure to GPU in solution_init
+  - Use registers to accumulate per-particle results (acex, acey, acez, arp1)
+  - Shared memory can cache neighbor particle data within a warp tile
+  - The Wendland kernel is cheap: main cost is memory access for neighbor data
+
+hints_l1: |
+  ### 1. Data Transfer Strategy
+  In solution_init:
+  - Allocate device buffers for all input arrays (8 float arrays + 3 int arrays)
+  - cudaMemcpy all to device
+  - Allocate output arrays (4 x N floats)
+  - Store scalar parameters (h, cs0, rhop0, etc.) in constant memory or kernel args
+
+  ### 2. Kernel Structure
+  ```cuda
+  __global__ void KerInteractionForces(int N,
+      const float* xs, const float* ys, const float* zs,
+      const float* vxs, const float* vys, const float* vzs,
+      const float* rhos, const float* masses,
+      float h, float bwenh, float kernelsize2,
+      float cs0, float alpha_visc, float ovrhopzero, float cteb,
+      const int* cell_begin, const int* cell_end, const int* sorted_idx,
+      int grid_nx, int grid_ny, int grid_nz, float cell_size,
+      float* ax, float* ay, float* az, float* drhodt) {
+
+      int i = blockIdx.x * blockDim.x + threadIdx.x;
+      if (i >= N) return;
+
+      float p1x = xs[i], p1y = ys[i], p1z = zs[i];
+      float acex = 0, acey = 0, acez = 0, arp1 = 0;
+
+      int cx = (int)floorf(p1x / cell_size);
+      int cy = (int)floorf(p1y / cell_size);
+      int cz = (int)floorf(p1z / cell_size);
+
+      // 3x3x3 neighbor cell iteration
+      for (int dz = -1; dz <= 1; dz++)
+        for (int dy = -1; dy <= 1; dy++)
+          for (int dx = -1; dx <= 1; dx++) {
+              int ncx = cx+dx, ncy = cy+dy, ncz = cz+dz;
+              if (ncx<0||ncy<0||ncz<0||ncx>=grid_nx||ncy>=grid_ny||ncz>=grid_nz) continue;
+              int cell = ncx + ncy*grid_nx + ncz*grid_nx*grid_ny;
+              int pini = cell_begin[cell], pfin = cell_end[cell];
+              if (pini < 0) continue;
+              // InteractionForcesFluidBox loop over [pini, pfin)
+              for (int p2 = pini; p2 < pfin; p2++) {
+                  int j = sorted_idx[p2];
+                  if (j == i) continue;
+                  // compute distance, kernel, forces...
+              }
+          }
+
+      ax[i] = acex; ay[i] = acey; az[i] = acez; drhodt[i] = arp1;
+  }
+  ```
+
+  ### 3. Optimizations
+  - Use __ldg() for read-only neighbor data
+  - Consider SoA vs AoS layout (SoA is better for coalescing)
+  - Unroll the 3x3x3 neighbor loop
+  - Use rsqrtf() instead of sqrtf() where possible
+  - Launch with 128-256 threads per block (register pressure is high)
+  - For advanced: use shared memory to cache neighbor positions for a warp

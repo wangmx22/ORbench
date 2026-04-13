@@ -1,0 +1,37 @@
+{
+  "task_id": "repo_pricing",
+  "name": "Repurchase Agreement Pricing (Bond + Repo Forward)",
+  "category": "financial_computing",
+  "difficulty": 2,
+  "tags": ["repo_pricing", "bond_pricing", "yield_solver", "date_arithmetic", "forward_pricing"],
+  "interface_mode": "compute_only",
+
+  "input_sizes": {
+    "small":  {"N": 100000,  "seed": 42},
+    "medium": {"N": 1000000, "seed": 42},
+    "large":  {"N": 5000000, "seed": 42}
+  },
+
+  "correctness": {
+    "mode": "numerical",
+    "atol": 0.01,
+    "rtol": 1e-4
+  },
+
+  "timing": {
+    "warmup": 3,
+    "trials": 10,
+    "timeout": 300
+  },
+
+  "build_command": "",
+  "extra_build_flags": "",
+
+  "gpu_optimization_points": [
+    "one_thread_per_repo",
+    "device_side_date_arithmetic",
+    "iterative_solver_on_gpu",
+    "coalesced_memory_access",
+    "register_local_cash_flows"
+  ]
+}

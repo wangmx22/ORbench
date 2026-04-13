@@ -1,0 +1,36 @@
+{
+  "task_id": "hausdorff_distance",
+  "name": "All-Pairs Directed Hausdorff Distance Between Point Spaces",
+  "category": "spatial_distance",
+  "difficulty": 2,
+  "tags": ["hausdorff", "trajectory_similarity", "atomic_max"],
+  "interface_mode": "compute_only",
+
+  "input_sizes": {
+    "small":  {"num_spaces": 16, "points_per_space": 64,  "seed": 42},
+    "medium": {"num_spaces": 32, "points_per_space": 256, "seed": 42},
+    "large":  {"num_spaces": 64, "points_per_space": 256, "seed": 42}
+  },
+
+  "correctness": {
+    "mode": "numerical",
+    "atol": 1e-3,
+    "rtol": 1e-4
+  },
+
+  "timing": {
+    "warmup": 3,
+    "trials": 10,
+    "timeout": 180
+  },
+
+  "build_command": "",
+  "extra_build_flags": "",
+
+  "gpu_optimization_points": [
+    "thread_per_lhs_point",
+    "shared_memory_rhs_tile",
+    "atomicMax_for_directed_max_min",
+    "coalesced_2d_point_loads"
+  ]
+}

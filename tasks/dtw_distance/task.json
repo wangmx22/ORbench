@@ -1,0 +1,36 @@
+{
+  "task_id": "dtw_distance",
+  "name": "Dynamic Time Warping Distance (Subject Database vs Query)",
+  "category": "time_series_distance",
+  "difficulty": 3,
+  "tags": ["dtw", "dynamic_programming", "wavefront_parallelism"],
+  "interface_mode": "compute_only",
+
+  "input_sizes": {
+    "small":  {"num_entries": 256,  "num_features": 1023, "seed": 42},
+    "medium": {"num_entries": 1024, "num_features": 1023, "seed": 42},
+    "large":  {"num_entries": 4096, "num_features": 1023, "seed": 42}
+  },
+
+  "correctness": {
+    "mode": "numerical",
+    "atol": 1e-2,
+    "rtol": 1e-3
+  },
+
+  "timing": {
+    "warmup": 3,
+    "trials": 10,
+    "timeout": 180
+  },
+
+  "build_command": "",
+  "extra_build_flags": "",
+
+  "gpu_optimization_points": [
+    "wavefront_diagonal_parallelism",
+    "warp_shuffle_propagation",
+    "constant_memory_query",
+    "register_blocked_dp"
+  ]
+}

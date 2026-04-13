@@ -1,0 +1,146 @@
+# Directed Hausdorff Distance (All-Pairs) -- Prompt Template
+
+task_description: |
+  Compute the directed Hausdorff distance between every ordered pair of point
+  "spaces" (e.g. trajectories or polyline samples). Given `num_spaces` point
+  clouds in 2D, each represented as a contiguous slice of one global points
+  array, output the `num_spaces x num_spaces` matrix of directed Hausdorff
+  distances.
+
+  The directed Hausdorff distance from space A to space B is
+      h(A -> B) = max_{a in A} min_{b in B} ||a - b||
+  i.e. the worst-case nearest-neighbor distance from points in A to points in B.
+  It is asymmetric: h(A->B) != h(B->A) in general.
+
+  Based on cuSpatial's `directed_hausdorff_distance` (NVIDIA RAPIDS).
+
+interface: |
+  ```c
+  // Called once: store host pointers to point and offset arrays.
+  // points_xy:     [num_points * 2] interleaved (x,y) float32
+  // space_offsets: [num_spaces]     int32, starting index of each space
+  extern "C" void solution_init(
+      int          num_points,
+      int          num_spaces,
+      const float* points_xy,
+      const int*   space_offsets
+  );
+
+  // Called multiple times. Must synchronize before returning.
+  // results: [num_spaces * num_spaces] float32
+  //   results[rhs * num_spaces + lhs] = h(space_lhs -> space_rhs)
+  extern "C" void solution_compute(
+      int    num_points,
+      int    num_spaces,
+      float* results
+  );
+  ```
+
+input_size_notes: |
+  | Size   | num_spaces | points/space | num_points | output cells |
+  |--------|------------|--------------|------------|--------------|
+  | small  | 16         | 64           | 1,024      | 256          |
+  | medium | 32         | 256          | 8,192      | 1,024        |
+  | large  | 64         | 256          | 16,384     | 4,096        |
+
+  - All spaces have the same number of points in this benchmark.
+  - Points are 2D (interleaved x,y).
+  - `space_offsets[s]` gives the start of space s in `points_xy / 2`.
+
+output_contract: |
+  - `results[rhs * num_spaces + lhs]` = directed Hausdorff distance
+    h(space_lhs -> space_rhs) = max over lhs points of (min over rhs points of distance)
+  - Tolerance: atol=1e-3, rtol=1e-4
+  - `solution_compute` must be idempotent and synchronize before returning
+  - Initialize the output to a sentinel value (e.g. -1) before launch so that
+    `atomicMax`-based updates work correctly.
+
+algorithm_background: |
+  **Directed Hausdorff distance**
+
+  For each ordered pair of spaces (A, B):
+      h(A -> B) = max_{a in A} (min_{b in B} ||a - b||_2)
+
+  Computing all `num_spaces^2` directed Hausdorff distances naively is
+  O(P^2) where P is the total number of points (each LHS point compares
+  against all RHS points across every RHS space).
+
+  cuSpatial's decomposition (the canonical GPU strategy):
+    * Each thread takes ownership of one *LHS point*.
+    * The thread's LHS space is determined by binary search over `space_offsets`.
+    * For each RHS space, the thread computes the *minimum squared distance*
+      from its LHS point to any point in that RHS space (a serial inner loop
+      over the RHS slice).
+    * The thread then writes its sqrt'd minimum to the output cell
+      `results[rhs_space * num_spaces + lhs_space]` using `atomicMax`.
+
+  After all threads finish, each cell holds `max_{lhs in space_lhs} (min over rhs)`,
+  i.e. the directed Hausdorff distance.
+
+hints_l2: |
+  - Thread granularity: one thread per LHS point. Threads in the same warp
+    typically share the same LHS space (good for branch coherence).
+  - Use `atomicMax` on float (via `__int_as_float`/`__float_as_int` CAS loop
+    on architectures pre-sm_90 that lack a native float atomicMax).
+  - Initialize the result matrix to a small sentinel (e.g. `-1.0f`) before
+    launching the kernel so that the very first atomicMax compares against
+    a valid value.
+  - Loading the RHS space points into shared memory in tiles can save global
+    bandwidth when `points_per_space` is large; for small spaces, plain global
+    loads are fine.
+
+hints_l1: |
+  ### 1. Data Transfer
+  - In `solution_init`: `cudaMalloc` and `cudaMemcpy` `points_xy` (as
+    `vec_2d` or `float2`) and `space_offsets`. Allocate `d_results` once.
+  - In `solution_compute`: launch init kernel (set d_results to -1), launch
+    main kernel, then `cudaMemcpy` to host.
+
+  ### 2. Float atomicMax (pre-sm_90)
+  ```cuda
+  __device__ float atomicMaxFloat(float* addr, float v) {
+      int* p = (int*)addr;
+      int old = *p, assumed;
+      do {
+          assumed = old;
+          float cur = __int_as_float(assumed);
+          if (v <= cur) break;
+          old = atomicCAS(p, assumed, __float_as_int(v));
+      } while (assumed != old);
+      return __int_as_float(old);
+  }
+  ```
+
+  ### 3. Main Kernel Sketch
+  ```cuda
+  __global__ void hausdorff(int num_points, const float2* points,
+                            int num_spaces, const int* offsets,
+                            float* results) {
+      int lhs = blockIdx.x*blockDim.x + threadIdx.x;
+      if (lhs >= num_points) return;
+
+      // Find LHS space (binary search; linear is fine for small num_spaces).
+      int lhs_space = num_spaces - 1;
+      for (int s = 0; s < num_spaces - 1; s++)
+          if (lhs < offsets[s+1]) { lhs_space = s; break; }
+
+      float2 a = points[lhs];
+
+      for (int rhs = 0; rhs < num_spaces; rhs++) {
+          int b0 = offsets[rhs];
+          int b1 = (rhs+1 == num_spaces) ? num_points : offsets[rhs+1];
+          float minsq = INFINITY;
+          for (int j = b0; j < b1; j++) {
+              float2 p = points[j];
+              float dx = p.x - a.x, dy = p.y - a.y;
+              float d2 = dx*dx + dy*dy;
+              if (d2 < minsq) minsq = d2;
+          }
+          atomicMaxFloat(&results[rhs * num_spaces + lhs_space], sqrtf(minsq));
+      }
+  }
+  ```
+
+  ### 4. Launch Configuration
+  - 64 or 128 threads per block (matches cuSpatial's choice of 64).
+  - Grid: `(num_points + threads - 1) / threads` blocks.

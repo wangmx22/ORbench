@@ -11,6 +11,18 @@ ORBench 评测大语言模型能否将通用 CPU 代码自动改写为高效的 
 | bellman_ford | 图算法 | ★★ | V=500K 节点 | init_compute | 同步开销 |
 | collision_detection | 计算几何 | ★★★ | C=30M 对 | init_compute | 负载均衡 |
 | network_rm_dp | 运筹/动态定价 | ★★★★ | S=2.8M 状态 | compute_only | 状态空间大小 |
+| black_scholes | 金融计算 | ★ | N=10M 期权 | compute_only | 超越函数吞吐 |
+| bonds_pricing | 金融计算 | ★ | N=10M 债券 | compute_only | Newton-Raphson 迭代 |
+| monte_carlo | 金融计算 | ★★ | N=10M 路径 | compute_only | RNG + 路径模拟 |
+| repo_pricing | 金融计算 | ★★ | N=5M 回购 | compute_only | 设备端日期算术 |
+| euclidean_distance_matrix | 空间距离 | ★ | 2048×2048 | compute_only | 共享内存 tiling |
+| hausdorff_distance | 空间距离 | ★★ | 64 空间×256 点 | compute_only | atomicMax 归约 |
+| dtw_distance | 时序距离 | ★★★ | 4096 序列×1023 帧 | compute_only | 波前对角并行 |
+| dbscan | 空间聚类 | ★★★ | N=500K 点 | init_compute | 邻域搜索 + 簇扩展 |
+| nbnxm_forces | 分子动力学 | ★★★ | N=500K 原子 | compute_only | 力累加 atomic |
+| sph_position | 流体仿真 | ★ | N=5M 粒子 | compute_only | 内存带宽 |
+| sph_cell_index | 流体仿真 | ★★ | N=5M 粒子 | compute_only | 并行排序 + scan |
+| sph_forces | 流体仿真 | ★★★★ | N=500K 粒子 | compute_only | 邻居遍历 + 寄存器压力 |
 
 ## 快速开始
 

@@ -1,0 +1,118 @@
+# Pairwise Squared Euclidean Distance Matrix -- Prompt Template
+
+task_description: |
+  Compute the pairwise squared Euclidean distance matrix between two sets of points.
+  Given a reference set R of `ref_nb` points and a query set Q of `query_nb` points,
+  each in `dim`-dimensional space, output the matrix
+      dist[q, r] = sum_{k=0}^{dim-1} (Q[q,k] - R[r,k])^2
+  for q in [0, query_nb), r in [0, ref_nb).
+
+  This is the inner kernel of k-NN search, classification, clustering, and many
+  spatial-distance pipelines. It is "embarrassingly parallel" but very memory-
+  bound on GPU when implemented naively, so high-quality implementations use
+  shared-memory tiling (similar to GEMM blocking).
+
+  Based on kNN-CUDA (Garcia, Debreuve & Barlaud), `compute_distances` kernel.
+
+interface: |
+  ```c
+  // Called once: store host pointers to column-major points.
+  // ref:   [dim, ref_nb]   column-major (point-major) float32
+  //        ref[k * ref_nb + r] = k-th coordinate of ref point r
+  // query: [dim, query_nb] column-major float32
+  //        query[k * query_nb + q] = k-th coordinate of query point q
+  extern "C" void solution_init(
+      int          ref_nb,
+      int          query_nb,
+      int          dim,
+      const float* ref,
+      const float* query
+  );
+
+  // Called multiple times. Must synchronize before returning.
+  // dist: [ref_nb, query_nb] row-major float32 (squared L2 distances)
+  //       dist[r * query_nb + q] = ||ref[r] - query[q]||^2
+  extern "C" void solution_compute(
+      int    ref_nb,
+      int    query_nb,
+      int    dim,
+      float* dist
+  );
+  ```
+
+input_size_notes: |
+  | Size   | ref_nb | query_nb | dim | output cells |
+  |--------|--------|----------|-----|--------------|
+  | small  | 128    | 128      | 32  | 16,384       |
+  | medium | 512    | 512      | 128 | 262,144      |
+  | large  | 2048   | 2048     | 256 | 4,194,304    |
+
+  - All sizes are powers of two and multiples of typical tile sizes (16, 32, 64).
+  - All inputs are float32 in row-major layout.
+
+output_contract: |
+  - `dist[r * query_nb + q]` = squared Euclidean distance from ref r to query q
+  - Tolerance: atol=1e-2, rtol=1e-4
+  - `solution_compute` must be idempotent and synchronize before returning
+
+algorithm_background: |
+  **Pairwise squared Euclidean distance**
+
+  For each pair (q, r), compute
+      dist[q, r] = sum_{k=0}^{dim-1} (Q[q,k] - R[r,k])^2
+
+  Naive triple loop is O(query_nb * ref_nb * dim).
+
+  The cells of `dist` are completely independent; the dot-product structure
+  along the `dim` axis lends itself to GEMM-style shared-memory blocking
+  exactly as in dense matrix multiply: load BLOCK x BLOCK tiles of points
+  cooperatively, accumulate partial SSDs in registers, sweep along `dim`.
+
+hints_l2: |
+  - Treat the computation like SGEMM with the inner accumulator
+    being `(a-b)^2` instead of `a*b`.
+  - Tile both the (query, ref) output plane and the `dim` reduction axis.
+  - 16x16 or 32x32 thread blocks work well; load tiles into shared memory
+    cooperatively, then accumulate squared differences in registers.
+  - Pre-upload `ref` and `query` to device memory once in `solution_init`.
+
+hints_l1: |
+  ### 1. Data Transfer
+  - In `solution_init`: `cudaMalloc` and `cudaMemcpy` ref, query (host -> device).
+  - Allocate output `d_dist` once, reuse across `solution_compute` calls.
+  - In `solution_compute`: launch kernel, then copy `d_dist` -> host `dist`.
+
+  ### 2. Tiled Kernel Skeleton
+  ```cuda
+  #define BD 16  // tile dim
+  __global__ void ed_kernel(int ref_nb, int query_nb, int dim,
+                            const float* ref, const float* query,
+                            float* dist) {
+      __shared__ float sQ[BD][BD];
+      __shared__ float sR[BD][BD];
+      int tx = threadIdx.x, ty = threadIdx.y;
+      int q = blockIdx.y * BD + ty;
+      int r = blockIdx.x * BD + tx;
+      float ssd = 0.f;
+      for (int k0 = 0; k0 < dim; k0 += BD) {
+          // Cooperative load
+          sQ[ty][tx] = (q < query_nb && k0+tx < dim) ? query[q*dim + k0+tx] : 0.f;
+          sR[ty][tx] = (r < ref_nb   && k0+tx < dim) ? ref  [r*dim + k0+tx] : 0.f;
+          __syncthreads();
+          if (q < query_nb && r < ref_nb) {
+              #pragma unroll
+              for (int k = 0; k < BD; k++) {
+                  float t = sQ[ty][k] - sR[tx][k];
+                  ssd += t * t;
+              }
+          }
+          __syncthreads();
+      }
+      if (q < query_nb && r < ref_nb)
+          dist[q*ref_nb + r] = ssd;
+  }
+  ```
+
+  ### 3. Launch Configuration
+  - Grid: `((ref_nb+BD-1)/BD, (query_nb+BD-1)/BD)`
+  - Block: `(BD, BD)`

@@ -1,0 +1,35 @@
+{
+  "task_id": "dbscan",
+  "name": "DBSCAN Density-Based Spatial Clustering",
+  "category": "spatial_clustering",
+  "difficulty": 3,
+  "tags": ["DBSCAN", "neighbor_search", "spatial_indexing", "cluster_expansion", "atomics"],
+
+  "input_sizes": {
+    "small":  {"N": 10000,  "eps_x10000": 300, "minPts": 4, "seed": 42},
+    "medium": {"N": 100000, "eps_x10000": 100, "minPts": 8, "seed": 42},
+    "large":  {"N": 500000, "eps_x10000": 50,  "minPts": 8, "seed": 42}
+  },
+
+  "correctness": {
+    "mode": "exact"
+  },
+
+  "timing": {
+    "warmup": 3,
+    "trials": 10,
+    "timeout": 300
+  },
+
+  "build_command": "",
+  "extra_build_flags": "",
+
+  "gpu_optimization_points": [
+    "spatial_indexing",
+    "grid_based_neighbor_search",
+    "parallel_cluster_expansion",
+    "atomic_cluster_assignment",
+    "shared_memory_point_cache",
+    "seed_list_management"
+  ]
+}

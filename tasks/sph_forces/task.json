@@ -1,0 +1,37 @@
+{
+  "task_id": "sph_forces",
+  "name": "SPH Force Computation (DualSPHysics KerInteractionForcesFluid)",
+  "category": "fluid_simulation",
+  "difficulty": 4,
+  "tags": ["sph", "force_computation", "neighbor_search", "wendland_kernel", "navier_stokes"],
+  "interface_mode": "compute_only",
+
+  "input_sizes": {
+    "small":  {"N": 10000,    "seed": 42},
+    "medium": {"N": 100000,   "seed": 42},
+    "large":  {"N": 500000,   "seed": 42}
+  },
+
+  "correctness": {
+    "mode": "numerical",
+    "atol": 0.01,
+    "rtol": 1e-3
+  },
+
+  "timing": {
+    "warmup": 3,
+    "trials": 10,
+    "timeout": 120
+  },
+
+  "build_command": "",
+  "extra_build_flags": "",
+
+  "gpu_optimization_points": [
+    "neighbor_list_traversal",
+    "shared_memory_tiling",
+    "warp_level_reduction",
+    "coalesced_memory_access",
+    "register_pressure_management"
+  ]
+}

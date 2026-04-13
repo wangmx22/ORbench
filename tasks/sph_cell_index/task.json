@@ -1,0 +1,36 @@
+{
+  "task_id": "sph_cell_index",
+  "name": "SPH Cell-Linked List Construction (DualSPHysics KerCalcBeginEndCell)",
+  "category": "fluid_simulation",
+  "difficulty": 2,
+  "tags": ["sph", "spatial_hashing", "sorting", "neighbor_search", "cell_linked_list"],
+  "interface_mode": "compute_only",
+
+  "input_sizes": {
+    "small":  {"N": 50000,    "seed": 42},
+    "medium": {"N": 500000,   "seed": 42},
+    "large":  {"N": 5000000,  "seed": 42}
+  },
+
+  "correctness": {
+    "mode": "exact",
+    "atol": 0,
+    "rtol": 0
+  },
+
+  "timing": {
+    "warmup": 3,
+    "trials": 10,
+    "timeout": 60
+  },
+
+  "build_command": "",
+  "extra_build_flags": "",
+
+  "gpu_optimization_points": [
+    "parallel_sort",
+    "shared_memory_scan",
+    "coalesced_memory_access",
+    "warp_level_primitives"
+  ]
+}

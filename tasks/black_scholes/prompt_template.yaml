@@ -1,0 +1,154 @@
+# Black-Scholes Analytic Option Pricing -- Prompt Template
+
+task_description: |
+  Compute Black-Scholes option prices for N European options using the analytic formula.
+  Each option has parameters: type (CALL=0/PUT=1), strike price (K), spot price (S),
+  dividend yield (q), risk-free rate (r), time to maturity (t), and volatility (vol/sigma).
+
+  The Black-Scholes formula involves computing cumulative normal distributions via the
+  error function -- a transcendental function that is the main computational bottleneck.
+  Each option is completely independent, making this embarrassingly parallel on GPU.
+
+  Based on FinanceBench (Scott Grauer-Gray et al.) / QuantLib analytic engine.
+
+interface: |
+  ```c
+  // Called once to receive option parameters (host pointers).
+  // Store pointers for use in solution_compute.
+  extern "C" void solution_init(
+      int N,                    // number of options
+      const int*   types,       // HOST [N]: 0=CALL, 1=PUT
+      const float* strikes,     // HOST [N]: strike price K
+      const float* spots,       // HOST [N]: spot price S
+      const float* qs,          // HOST [N]: dividend yield q
+      const float* rs,          // HOST [N]: risk-free rate r
+      const float* ts,          // HOST [N]: time to maturity (years)
+      const float* vols         // HOST [N]: volatility sigma
+  );
+
+  // Called multiple times (must be idempotent and synchronize before returning).
+  // Compute Black-Scholes price for each of the N options.
+  extern "C" void solution_compute(
+      int N,                    // number of options
+      float* prices             // HOST [N]: output option prices
+  );
+  ```
+
+input_size_notes: |
+  | Size   | N (options)  |
+  |--------|-------------|
+  | small  | 100,000     |
+  | medium | 1,000,000   |
+  | large  | 10,000,000  |
+
+  - Each option is independent -- no data dependencies between options
+  - Parameters cycle through 37 distinct configurations (representative market scenarios)
+  - Option types: CALL (0) and PUT (1)
+  - All parameter arrays are contiguous float32 (int32 for types)
+
+output_contract: |
+  - `prices[i]` = Black-Scholes analytic price for option i (float32)
+  - Tolerance: atol=0.01, rtol=1e-4
+  - `solution_compute` must be idempotent and synchronize before returning
+  - Output prices are written to a host float array
+
+algorithm_background: |
+  **Black-Scholes Analytic Pricing (QuantLib-style)**
+
+  For each option with parameters (type, K, S, q, r, t, sigma):
+
+  1. Compute variance and standard deviation:
+     ```
+     variance = sigma^2 * t
+     stdDev   = sqrt(variance)
+     ```
+
+  2. Compute discount factors:
+     ```
+     dividendDiscount = exp(-q * t)
+     riskFreeDiscount = exp(-r * t)
+     ```
+
+  3. Compute forward price:
+     ```
+     forward = S * dividendDiscount / riskFreeDiscount
+     ```
+
+  4. Compute d1 and d2:
+     ```
+     d1 = ln(forward / K) / stdDev + 0.5 * stdDev
+     d2 = d1 - stdDev
+     ```
+
+  5. Compute cumulative normal distribution:
+     ```
+     N(x) = 0.5 * (1 + erf(x / sqrt(2)))
+     ```
+
+  6. Compute option price:
+     ```
+     For CALL:
+       alpha =  N(d1),    beta = -N(d2)
+     For PUT:
+       alpha = -1 + N(d1), beta = 1 - N(d2)
+
+     price = riskFreeDiscount * (forward * alpha + K * beta)
+     ```
+
+  The error function (erf) uses a piecewise rational polynomial approximation
+  with different coefficient sets for different input ranges:
+    - |x| < 0.84375: degree-4 rational
+    - |x| < 1.25: degree-6 rational
+    - |x| < 2.857: degree-7/8 rational (erfc region)
+    - |x| < 6.0: degree-6/7 rational (erfc region)
+    - |x| >= 6.0: saturate to +/-1
+
+  Total: ~80 FLOPs per option, dominated by exp(), log(), sqrt(), and erf().
+
+hints_l2: |
+  - Each option is independent -- one thread per option, trivially parallel
+  - Use fast math intrinsics on GPU: `__expf()`, `__logf()`, `rsqrtf()`
+  - All input arrays are contiguous float32 -- coalesced memory access is natural
+  - Pre-upload all parameter arrays to GPU in `solution_init`, reuse across calls
+  - The error function is pure arithmetic with no memory access -- compute-bound
+  - Consider using shared memory to cache frequently-used constants
+
+hints_l1: |
+  ### 1. Data Transfer Strategy
+  In `solution_init`:
+  - Allocate device buffers for all 7 input arrays + 1 output array
+  - `cudaMemcpy` all inputs to device (done once)
+  - Allocate `d_prices` on device (reused across `solution_compute` calls)
+
+  In `solution_compute`:
+  - Launch kernel, then `cudaMemcpy` results back to host `prices`
+
+  ### 2. Kernel Structure
+  ```cuda
+  __global__ void bs_kernel(int N, const int* types, const float* strikes,
+                            const float* spots, const float* qs, const float* rs,
+                            const float* ts, const float* vols, float* prices) {
+      int i = blockIdx.x * blockDim.x + threadIdx.x;
+      if (i >= N) return;
+
+      float vol = vols[i], t = ts[i];
+      float variance = vol * vol * t;
+      float stdDev = sqrtf(variance);
+      float divDisc = __expf(-qs[i] * t);
+      float rfDisc  = __expf(-rs[i] * t);
+      float fwd = spots[i] * divDisc / rfDisc;
+      float d1 = __logf(fwd / strikes[i]) / stdDev + 0.5f * stdDev;
+      float d2 = d1 - stdDev;
+      // ... compute erf, CND, alpha/beta, result ...
+      prices[i] = result;
+  }
+  ```
+
+  ### 3. Error Function Implementation
+  Port the piecewise rational approximation directly to device code, or
+  use `erff()` (CUDA math library, maps to hardware on sm_80+).
+
+  ### 4. Launch Configuration
+  - 256 threads per block (typical for compute-bound kernels)
+  - Grid: `(N + 255) / 256` blocks
+  - No shared memory needed (each thread is independent)

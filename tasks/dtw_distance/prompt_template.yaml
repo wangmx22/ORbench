@@ -1,0 +1,118 @@
+# Dynamic Time Warping Distance -- Prompt Template
+
+task_description: |
+  Compute the Dynamic Time Warping (DTW) distance between a single query time
+  series of length L and each of `num_entries` "subject" time series of the
+  same length L, and write one DTW distance per subject.
+
+  DTW is the canonical elastic similarity measure for time series: it allows
+  non-linear alignments along the time axis and is widely used for ECG
+  classification, gesture recognition, gene expression analysis, and audio.
+  Unlike Euclidean distance, DTW has an O(L^2) data dependency through a
+  dynamic-programming table, which makes it the textbook example of a problem
+  that requires *wavefront parallelism* on GPU.
+
+  Based on cuDTW++ (Schmidt & Hundt, "cuDTW++: Ultra-Fast Dynamic Time Warping
+  on CUDA-enabled GPUs", Euro-Par 2020).
+
+interface: |
+  ```c
+  // Called once: store host pointers.
+  // subjects: [num_entries, num_features] row-major float32
+  // query:    [num_features]              float32
+  extern "C" void solution_init(
+      int          num_entries,
+      int          num_features,
+      const float* subjects,
+      const float* query
+  );
+
+  // Called multiple times. Must synchronize before returning.
+  // distances: [num_entries] float32, one DTW distance per subject
+  extern "C" void solution_compute(
+      int    num_entries,
+      int    num_features,
+      float* distances
+  );
+  ```
+
+input_size_notes: |
+  | Size   | num_entries | num_features (L) | DP cells per call | data scale |
+  |--------|-------------|------------------|-------------------|------------|
+  | small  | 512         | 128              | 8.4 M             | tiny       |
+  | medium | 1024        | 512              | 268 M             | medium     |
+  | large  | 2048        | 1024             | 2.1 G             | heavy      |
+
+  - All sequences are float32, length L = num_features (constant within a run)
+  - Subjects are stored row-major: `subjects[e*L + i]` is sample `i` of entry `e`
+  - Each subject is z-normalized; query is z-normalized too
+
+output_contract: |
+  - `distances[e]` = DTW(query, subjects[e]) using squared-Euclidean local cost
+  - Tolerance: atol=1e-2, rtol=1e-3
+  - `solution_compute` must be idempotent and synchronize before returning
+
+algorithm_background: |
+  **Full DTW with squared-Euclidean local cost**
+
+  Given query Q[0..L-1] and subject S[0..L-1], build the DP table
+
+      D[0][0] = (Q[0] - S[0])^2
+      D[i][0] = (Q[i] - S[0])^2 + D[i-1][0]                      // top column
+      D[0][j] = (Q[0] - S[j])^2 + D[0][j-1]                      // left row
+      D[i][j] = (Q[i] - S[j])^2
+              + min(D[i-1][j-1], D[i-1][j], D[i][j-1])           // interior
+
+  The DTW distance is `D[L-1][L-1]`. Each cell depends on its upper-left,
+  upper, and left neighbors — a 2D causal stencil.
+
+  Naive memory is O(L^2) per subject; only the previous row is needed at any
+  time, so a 2-row rolling buffer suffices (O(L)).
+
+hints_l2: |
+  - Two complementary sources of parallelism:
+    1. **Across subjects** — every subject is independent (trivial).
+    2. **Within a subject** — anti-diagonal wavefront: cells (i,j) on the same
+       diagonal (i+j == const) are independent and can be filled together.
+  - Naive baseline gives one thread per subject — leaves on-chip parallelism
+    on the table, but is correct.
+  - cuDTW++ assigns one warp per subject and walks an anti-diagonal of 32
+    cells per cycle using `__shfl_up_sync` to propagate the left/diagonal
+    dependency between lanes.
+  - The query is read-only and broadcast to every thread; cache it in
+    `__constant__` memory for length L <= 16K, otherwise shared memory.
+
+hints_l1: |
+  ### 1. Data Transfer
+  - In `solution_init`: `cudaMalloc` and `cudaMemcpy` subjects + query (once).
+    Allocate output `d_distances` and any DP scratch up front.
+  - In `solution_compute`: launch kernel(s), then copy `d_distances` to host.
+
+  ### 2. Wavefront Within a Subject (cuDTW-style)
+  Use one warp per subject, with each lane owning `L/32` consecutive columns.
+  Walk anti-diagonals; for each anti-diagonal, one cell per lane fires:
+
+  ```cuda
+  // each lane owns a register pair (penalty_here, penalty_left, penalty_diag)
+  // for k in [0, 2L-1):
+  //     penalty_here = sq(q - s) + min(left, here, diag)
+  //     diag = left;
+  //     left = __shfl_up_sync(0xffffffff, here, 1);
+  //     if (lane == 0) left = INFINITY;  // boundary
+  ```
+
+  Variants in cuDTW++ unroll this with 4 cells per lane in registers
+  (`SHFL_FULLDTW_127`/`_255`/`_511`/`_1023`/`_2047` kernels).
+
+  ### 3. Across-Subject Parallelism
+  - Launch `(num_entries, 1, 1)` grid with block of one warp.
+  - Or for larger blocks, launch `num_entries / k` blocks of `k` warps and pack
+    `k` subjects per block.
+
+  ### 4. Constant Memory Query
+  ```cuda
+  __constant__ float cQuery[MAX_L];
+  // host: cudaMemcpyToSymbol(cQuery, query, L*sizeof(float));
+  ```
+  All threads broadcast-load the query; `__constant__` memory cuts global
+  bandwidth pressure dramatically.

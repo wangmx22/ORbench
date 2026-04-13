@@ -1,0 +1,188 @@
+# Non-Bonded Force Calculation (GROMACS nbnxm cluster-based) — Prompt Template
+
+task_description: |
+  Compute non-bonded interaction forces (Lennard-Jones + Coulomb) for a molecular system
+  using a **cluster-based pair list** — the same data layout used by GROMACS, the world's
+  fastest molecular dynamics code.
+
+  Atoms are grouped into clusters of 4 (CLUSTER_SIZE=4). The pair list is organized as
+  **i-cluster entries**, each paired with a list of **j-clusters**. Each i-cluster/j-cluster
+  pair forms a 4×4 interaction tile (16 atom pairs), controlled by a per-pair **exclusion bitmask**.
+
+  For each active atom pair (i, j) within cutoff:
+  1. **Lennard-Jones force**: F_LJ = (C12·r⁻¹² − C6·r⁻⁶) · r⁻²
+  2. **Coulomb force**: F_coul = k_e · q_i · q_j · r⁻² · r⁻¹
+  3. Accumulate forces on both atoms (Newton's 3rd law)
+  4. Accumulate LJ and Coulomb potential energies
+
+  The cluster layout enables the key GPU optimization: one thread block processes one
+  i-cluster entry with a 4×4 thread tile (16 threads), and each thread handles one
+  (i-atom, j-atom) pair across all j-clusters.
+
+  Reference: GROMACS nbnxm kernel — gromacs/nbnxm/cuda/nbnxm_cuda_kernel.cuh
+
+interface: |
+  ```c
+  // Called repeatedly in compute_only mode. ALL work (upload, compute, download) happens here.
+  extern "C" void solution_compute(
+      int N,                            // total number of atoms (padded to multiple of 4)
+      int num_ci,                       // number of i-cluster entries
+      int num_cj,                       // total number of j-cluster entries across all i-clusters
+      int num_types,                    // number of atom types
+      float rcut2,                      // cutoff distance squared (nm²)
+      const float* x,                   // HOST [N*3]: atom coordinates (x,y,z) in nm, cluster-sorted
+      const float* q,                   // HOST [N]: partial charges (e)
+      const int*   type,                // HOST [N]: atom type index (0..num_types-1)
+      const float* nbfp,                // HOST [num_types * num_types * 2]: interleaved (c6, c12) pairs
+                                        //   nbfp[type_i * num_types*2 + type_j*2]   = c6
+                                        //   nbfp[type_i * num_types*2 + type_j*2+1] = c12
+      const int*   ci_idx,              // HOST [num_ci]: i-cluster index for each entry
+      const int*   ci_cj_start,         // HOST [num_ci]: start index into cj_idx/cj_excl arrays
+      const int*   ci_cj_end,           // HOST [num_ci]: end index (exclusive)
+      const int*   cj_idx,              // HOST [num_cj]: j-cluster index for each j-entry
+      const unsigned int* cj_excl,      // HOST [num_cj]: exclusion bitmask (see below)
+      float* forces,                    // HOST [N*3]: output accumulated forces (kJ/mol/nm)
+      float* energy_out                 // HOST [2]: output [E_lj, E_coul] (kJ/mol)
+  );
+
+  extern "C" void solution_free(void);
+  ```
+
+  ### Cluster Layout
+
+  Atoms are grouped into clusters of 4. Cluster `ci` contains atoms `[ci*4, ci*4+1, ci*4+2, ci*4+3]`.
+  Within a block, `tidxi` (0-3) selects the i-atom, `tidxj` (0-3) selects the j-atom.
+
+  ### Pair List Structure
+
+  For i-cluster entry `bid` (0..num_ci-1):
+  - `ci = ci_idx[bid]` — the i-cluster index
+  - j-clusters are `cj_idx[ci_cj_start[bid] .. ci_cj_end[bid]-1]`
+  - For each j-entry at position `cjind`:
+    - `cj = cj_idx[cjind]` — j-cluster index
+    - `excl = cj_excl[cjind]` — 16-bit exclusion mask
+    - Bit `(tidxi * 4 + tidxj)` of `excl`: 1 = compute interaction, 0 = skip
+
+  ### LJ Parameter Access
+
+  ```c
+  int ntype2 = num_types * 2;
+  float c6  = nbfp[type_i * ntype2 + type_j * 2];
+  float c12 = nbfp[type_i * ntype2 + type_j * 2 + 1];
+  ```
+
+input_size_notes: |
+  | Size   | Atoms (N) | i-clusters | j-entries  | rcut |
+  |--------|-----------|------------|------------|------|
+  | small  | 12,000    | ~3,000     | ~350K      | 1.2nm|
+  | medium | 100,000   | 25,000     | ~9.7M      | 1.0nm|
+  | large  | 500,000   | 125,000    | ~53M       | 1.0nm|
+
+  - CLUSTER_SIZE = 4 (always)
+  - Atom types: 2 (oxygen-like and hydrogen-like, SPC/E water)
+  - Coulomb constant: k_e = 138.935456 kJ·nm/(mol·e²)
+  - Coordinates are spatially sorted for cache locality
+  - Atoms beyond real count (padding) are placed at (1e10, 1e10, 1e10) — auto-excluded by cutoff
+
+output_contract: |
+  - `forces[i*3+0..2]` = accumulated force on atom i
+  - `energy_out[0]` = total LJ energy = Σ (C12·r⁻¹²/12 − C6·r⁻⁶/6) over active pairs
+  - `energy_out[1]` = total Coulomb energy = Σ k_e·q_i·q_j·r⁻¹ over active pairs
+  - Forces array must be zeroed before accumulation
+  - `solution_compute` must synchronize (cudaDeviceSynchronize) before returning
+  - Must be idempotent (same output on repeated calls)
+
+algorithm_background: |
+  **GROMACS-style Cluster-Based Non-Bonded Force Calculation**
+
+  The key insight is the 4×4 cluster tile: one thread block of 16 threads (4×4) processes
+  all interactions between one i-cluster and its paired j-clusters.
+
+  ```
+  For each i-cluster entry (one per thread block):
+    ci = ci_idx[blockIdx.x]
+    Load i-atom coords, charges, types into shared memory (4 atoms)
+
+    For each j-cluster in [ci_cj_start..ci_cj_end):
+      cj = cj_idx[cjind]
+      excl = cj_excl[cjind]  // 16-bit mask
+
+      // Each thread handles one (i,j) atom pair:
+      //   i-atom: ci * 4 + tidxi
+      //   j-atom: cj * 4 + tidxj
+      if bit (tidxi*4 + tidxj) of excl is set:
+        compute r², check cutoff
+        compute LJ + Coulomb forces
+        accumulate i-force locally
+        accumulate j-force via atomicAdd (or warp reduction)
+
+    Reduce i-forces across tidxj threads → write to global
+    Reduce energies → atomicAdd to global accumulators
+  ```
+
+  **Cost per pair**: ~50 FLOPs. Kernel is typically compute-bound on modern GPUs
+  due to the high arithmetic intensity within each 4×4 tile.
+
+hints_l2: |
+  - **Thread layout**: dim3 block(4, 4) = 16 threads per block, one block per ci entry
+  - Load i-cluster data (coords, charges, types) into **shared memory** — reused across all j-clusters
+  - Exclusion mask bit: `(excl >> (tidxi * 4 + tidxj)) & 1`
+  - j-atom force: use `atomicAdd` (simplest) or warp-shuffle reduction (faster)
+  - LJ params are tiny (num_types²=4 entries) → shared memory or registers
+  - Use `rsqrtf(r2)` for fast inverse sqrt
+  - Energy: block-reduce via shared memory, then atomicAdd to global
+
+hints_l1: |
+  ### 1. Kernel Structure (matches GROMACS nbnxm)
+  ```cuda
+  __launch_bounds__(16, 16)
+  __global__ void nbnxm_kernel(int num_ci, ...) {
+      int bid = blockIdx.x;
+      int tidxi = threadIdx.x;  // i-atom (0-3)
+      int tidxj = threadIdx.y;  // j-atom (0-3)
+
+      int ci = ci_idx[bid];
+
+      // Load i-cluster into shared memory
+      __shared__ float s_xi[4*3], s_qi[4];
+      __shared__ int s_typei[4];
+      if (threadIdx.y * 4 + threadIdx.x < 4) {
+          int ai = ci * 4 + threadIdx.x;
+          s_xi[threadIdx.x*3+0] = x[ai*3+0];
+          // ... load y, z, q, type
+      }
+      __syncthreads();
+
+      float fi_x=0, fi_y=0, fi_z=0, E_lj=0, E_coul=0;
+
+      for (int cjind = ci_cj_start[bid]; cjind < ci_cj_end[bid]; cjind++) {
+          int cj = cj_idx[cjind];
+          unsigned int excl = cj_excl[cjind];
+          if (!((excl >> (tidxi*4+tidxj)) & 1)) continue;
+
+          int aj = cj * 4 + tidxj;
+          // load j-atom, compute distance, LJ, Coulomb, forces
+          // accumulate i-force locally, j-force via atomicAdd
+      }
+      // reduce i-forces across tidxj, write to global
+  }
+  ```
+
+  ### 2. Data Packing Optimization
+  Pack (x,y,z,q) into `float4` for coalesced loads — one 128-bit load per atom.
+  Pack (c6,c12) into `float2` — one 64-bit load per LJ lookup.
+
+  ### 3. Warp-Shuffle Force Reduction (advanced)
+  Instead of shared-memory reduction for i-forces, use `__shfl_down_sync` / `__shfl_up_sync`
+  to reduce across tidxj within the warp. This avoids `__syncthreads()` entirely.
+  Same technique for energy reduction.
+
+  ### 4. j-Force Reduction
+  The simplest approach: `atomicAdd(&forces[aj*3+k], -f_k)` per pair.
+  Advanced: accumulate j-force per j-cluster in registers, then reduce with warp shuffle
+  before a single atomicAdd per j-atom.
+
+  ### 5. Memory Optimization
+  - Use `__launch_bounds__(16, 16)` to hint the compiler for register allocation
+  - 16 blocks/SM × 16 threads/block = 256 threads/SM (low occupancy but high ILP)
+  - LJ table is tiny: load into shared memory at block start

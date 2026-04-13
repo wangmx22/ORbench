@@ -1,0 +1,117 @@
+# SPH Particle Position Update -- Prompt Template
+
+task_description: |
+  Update particle positions in a Smoothed Particle Hydrodynamics (SPH) simulation.
+  Each particle has a 3D position (x, y, z) and a displacement vector (movx, movy, movz).
+  For each particle: compute new_pos = old_pos + displacement, then compute the cell
+  index from the new position using floor(pos / cell_size).
+
+  This is the position integration step from DualSPHysics (Crespo et al. 2015),
+  specifically the KerUpdatePos / KerComputeStepPos kernels. Each particle is
+  completely independent, making this embarrassingly parallel.
+
+  Based on: DualSPHysics JSphGpu_ker.cu, KerUpdatePos.
+  Reference: Crespo et al. "DualSPHysics: Open-source parallel CFD solver based on
+  SPH", Computer Physics Communications, 2015.
+
+interface: |
+  ```c
+  // Called once to receive particle data (host pointers).
+  extern "C" void solution_init(
+      int N,                      // number of particles
+      const double* posxy_x,      // HOST [N]: x positions
+      const double* posxy_y,      // HOST [N]: y positions
+      const double* posz,         // HOST [N]: z positions
+      const double* movxy_x,      // HOST [N]: x displacements
+      const double* movxy_y,      // HOST [N]: y displacements
+      const double* movz,         // HOST [N]: z displacements
+      double cell_size            // cell size for spatial hashing
+  );
+
+  // Called multiple times (must be idempotent and synchronize before returning).
+  extern "C" void solution_compute(
+      int N,                      // number of particles
+      double* out_x,              // HOST [N]: output x positions
+      double* out_y,              // HOST [N]: output y positions
+      double* out_z,              // HOST [N]: output z positions
+      int* out_cell               // HOST [N]: output linearized cell index
+  );
+  ```
+
+input_size_notes: |
+  | Size   | N (particles) |
+  |--------|--------------|
+  | small  | 50,000       |
+  | medium | 500,000      |
+  | large  | 5,000,000    |
+
+  - Each particle is independent -- one thread per particle
+  - Positions are float64 (double precision, matching DualSPHysics)
+  - Displacements are small (dt * velocity, typical SPH timestep ~1e-4)
+  - Cell index is linearized as: floor(x/cell_size) + floor(y/cell_size)*1000 + floor(z/cell_size)*1000000
+
+output_contract: |
+  - out_x[i] = posxy_x[i] + movxy_x[i]
+  - out_y[i] = posxy_y[i] + movxy_y[i]
+  - out_z[i] = posz[i] + movz[i]
+  - out_cell[i] = floor(out_x[i]/cell_size) + floor(out_y[i]/cell_size)*1000 + floor(out_z[i]/cell_size)*1000000
+  - Tolerance: atol=1e-6, rtol=1e-5
+  - solution_compute must be idempotent and synchronize before returning
+
+algorithm_background: |
+  **SPH Position Update (Symplectic Euler / Verlet)**
+
+  In SPH fluid simulation, the position update step is:
+  ```
+  x_new = x_old + dt * v
+  ```
+  where dt*v is provided as the displacement vector (movx, movy, movz).
+
+  After updating position, the cell index must be recomputed for the
+  spatial data structure used in neighbor search:
+  ```
+  cx = floor(x / cell_size)
+  cy = floor(y / cell_size)
+  cz = floor(z / cell_size)
+  cell = cx + cy * 1000 + cz * 1000000
+  ```
+
+  This kernel is memory-bandwidth bound on GPU: each particle reads 6 doubles
+  (48 bytes) and writes 3 doubles + 1 int (28 bytes).
+
+hints_l2: |
+  - Each particle is independent -- one thread per particle, trivially parallel
+  - All arrays are contiguous -- coalesced memory access is natural
+  - Pre-upload all arrays to GPU in solution_init, copy results back in solution_compute
+  - This is bandwidth-bound: minimize memory transactions
+  - Consider using vectorized loads (double2) to match DualSPHysics data layout
+
+hints_l1: |
+  ### 1. Data Transfer Strategy
+  In solution_init:
+  - Allocate device buffers for 6 input arrays (double) + 3 output arrays (double) + 1 output (int)
+  - cudaMemcpy all inputs to device (done once)
+
+  In solution_compute:
+  - Launch kernel, then cudaMemcpy results back to host
+
+  ### 2. Kernel Structure
+  ```cuda
+  __global__ void KerUpdatePos(int N, const double* px, const double* py,
+      const double* pz, const double* mx, const double* my, const double* mz,
+      double cell_size, double* ox, double* oy, double* oz, int* ocell) {
+      int i = blockIdx.x * blockDim.x + threadIdx.x;
+      if (i >= N) return;
+      double rx = px[i] + mx[i];
+      double ry = py[i] + my[i];
+      double rz = pz[i] + mz[i];
+      ox[i] = rx; oy[i] = ry; oz[i] = rz;
+      ocell[i] = (int)floor(rx/cell_size) + (int)floor(ry/cell_size)*1000
+               + (int)floor(rz/cell_size)*1000000;
+  }
+  ```
+
+  ### 3. Launch Configuration
+  - 256 threads per block
+  - Grid: (N + 255) / 256 blocks
+  - No shared memory needed
